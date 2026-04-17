@@ -28,6 +28,14 @@ DEFAULT_WARMUP_MONTHS = 6   # 默认因子热身期: 10 个月
 DEFAULT_QUANTILE_GROUPS = 5  # 默认分组数
 DEFAULT_FORWARD_PERIODS = [1, 5, 10, 20]  # 默认前瞻期(交易日)
 
+# ============ 持久化配置 ============
+# 支持任意 SQLAlchemy URL:
+#   sqlite:///{path}
+#   mysql+pymysql://user:pwd@host:3306/db
+#   postgresql+psycopg2://user:pwd@host:5432/db
+# 可通过环境变量 QTRADE_DB_URL 覆盖。
+DEFAULT_DB_URL = f"sqlite:///{(DATA_DIR / 'backtests.db').as_posix()}"
+
 
 # ============ 智能日期工具 ============
 

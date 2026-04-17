@@ -70,6 +70,53 @@ class BacktestResult:
         trades.to_csv(path, index=False, encoding="utf-8-sig")
         return path
 
+    # ------------------------------------------------------------------
+    # 数据库持久化 (SQLite / MySQL / PostgreSQL)
+    # ------------------------------------------------------------------
+    def save(
+        self,
+        name: str,
+        strategy_name: str = "",
+        config: dict | None = None,
+        notes: str | None = None,
+        store=None,
+    ) -> int:
+        """保存回测结果到 SQL 数据库, 返回 run_id。
+
+        参数
+        ----
+        name : 本次运行的业务名称 (如 "MyStrategy-v2")
+        strategy_name : 策略类名 (可选)
+        config : 任意可 JSON 序列化的参数 dict
+        notes : 备注
+        store : 可选 BacktestStore, 默认使用 qtrade.persistence.get_default_store()
+        """
+        if store is None:
+            from qtrade.persistence import get_default_store
+
+            store = get_default_store()
+        return store.save(
+            self, name=name, strategy_name=strategy_name, config=config, notes=notes
+        )
+
+    @classmethod
+    def load(cls, run_id: int, store=None) -> "BacktestResult":
+        """从数据库读取回测结果。"""
+        if store is None:
+            from qtrade.persistence import get_default_store
+
+            store = get_default_store()
+        return store.load(run_id)
+
+    @classmethod
+    def list_runs(cls, limit: int = 100, store=None) -> pd.DataFrame:
+        """列出数据库中已保存的回测。"""
+        if store is None:
+            from qtrade.persistence import get_default_store
+
+            store = get_default_store()
+        return store.list_runs(limit=limit)
+
 
 # ====================================================================
 # 内部: backtrader Strategy 适配器

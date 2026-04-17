@@ -7,3 +7,7 @@ pyarrow>=14.0
 rich>=13.0
 lxml>=4.9
 backtrader>=1.9.78
+sqlalchemy>=2.0
+# 可选 DB 驱动 (按需安装):
+# pymysql>=1.1            # MySQL
+# psycopg2-binary>=2.9    # PostgreSQL
