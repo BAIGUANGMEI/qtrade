@@ -14,6 +14,7 @@ import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dcc, html
 
 from qtrade.dashboard.data_provider import DashboardData, run_backtest
+from qtrade.data.market_data import load_sp500_symbols
 
 # 自动发现策略 & 因子 -----------------------------------------------
 # 触发因子注册
@@ -135,6 +136,36 @@ sidebar = html.Div(
             className="mb-3",
             style={"minHeight": "28px"},
         ),
+        # -------- 股票池 --------
+        html.Label("股票池", className="text-muted small mb-1"),
+        dbc.Select(
+            id="pool-type",
+            options=[
+                {"label": "S&P 500 全成分股", "value": "sp500"},
+                {"label": "自定义股票池", "value": "custom"},
+            ],
+            value="sp500",
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                dbc.Button(
+                    "选择股票…",
+                    id="open-stock-picker",
+                    color="outline-info",
+                    size="sm",
+                    className="w-100 mb-1",
+                    style={"display": "none"},
+                ),
+                html.Div(
+                    id="pool-summary",
+                    className="text-muted small mb-3",
+                    style={"minHeight": "20px"},
+                ),
+            ],
+        ),
+        # 存放已选股票代码列表
+        dcc.Store(id="selected-symbols", data=[]),
         # -------- 选股数量 --------
         html.Label("选股数量", className="text-muted small mb-1"),
         dbc.Input(id="top-n", type="number", value=10, min=3, max=50, className="mb-3"),
@@ -188,6 +219,80 @@ sidebar = html.Div(
 )
 
 # ====================================================================
+# 股票选择器弹窗
+# ====================================================================
+
+_sp500_all = sorted(load_sp500_symbols())
+
+stock_picker_modal = dbc.Modal(
+    [
+        dbc.ModalHeader(dbc.ModalTitle("选择股票"), close_button=True),
+        dbc.ModalBody(
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Input(
+                                id="stock-search",
+                                placeholder="搜索股票代码…",
+                                type="text",
+                                debounce=True,
+                                className="mb-2",
+                            ),
+                            width=8,
+                        ),
+                        dbc.Col(
+                            [
+                                dbc.Button("全选", id="stock-select-all",
+                                           color="outline-secondary", size="sm",
+                                           className="me-1"),
+                                dbc.Button("清空", id="stock-clear-all",
+                                           color="outline-secondary", size="sm"),
+                            ],
+                            width=4,
+                            className="text-end",
+                        ),
+                    ],
+                    className="mb-2",
+                ),
+                html.Div(
+                    id="stock-count",
+                    className="text-muted small mb-2",
+                ),
+                html.Div(
+                    dbc.Checklist(
+                        id="stock-checklist",
+                        options=[{"label": s, "value": s} for s in _sp500_all],
+                        value=[],
+                        inline=True,
+                        className="stock-checklist-grid",
+                        input_class_name="me-1",
+                        label_class_name="me-3 mb-1 small",
+                    ),
+                    style={
+                        "maxHeight": "400px",
+                        "overflowY": "auto",
+                        "border": "1px solid #444",
+                        "borderRadius": "6px",
+                        "padding": "10px",
+                    },
+                ),
+            ]
+        ),
+        dbc.ModalFooter(
+            [
+                html.Span(id="modal-selected-count", className="text-muted small me-auto"),
+                dbc.Button("确认", id="stock-picker-confirm", color="primary"),
+            ]
+        ),
+    ],
+    id="stock-picker-modal",
+    size="lg",
+    scrollable=True,
+    is_open=False,
+)
+
+# ====================================================================
 # 布局
 # ====================================================================
 
@@ -196,6 +301,7 @@ app.layout = html.Div(
         dcc.Location(id="url"),
         dcc.Store(id="backtest-done", data=0),
         sidebar,
+        stock_picker_modal,
         html.Div(id="page-content", style=CONTENT_STYLE),
     ]
 )
@@ -204,6 +310,103 @@ app.layout = html.Div(
 # ====================================================================
 # 运行回测回调
 # ====================================================================
+
+
+@callback(
+    Output("open-stock-picker", "style"),
+    Output("pool-summary", "children"),
+    Input("pool-type", "value"),
+    Input("selected-symbols", "data"),
+)
+def toggle_stock_picker_button(pool_type, selected):
+    """切换股票池类型时显示/隐藏选股按钮"""
+    if pool_type == "custom":
+        n = len(selected) if selected else 0
+        summary = f"已选 {n} 只股票" if n else "尚未选择"
+        return {}, html.Span(summary, className="text-info")
+    return {"display": "none"}, html.Span(f"共 {len(_sp500_all)} 只", className="text-muted")
+
+
+@callback(
+    Output("stock-picker-modal", "is_open"),
+    Output("stock-checklist", "value"),
+    Input("open-stock-picker", "n_clicks"),
+    Input("stock-picker-confirm", "n_clicks"),
+    State("stock-picker-modal", "is_open"),
+    State("selected-symbols", "data"),
+    prevent_initial_call=True,
+)
+def toggle_modal(open_clicks, confirm_clicks, is_open, current_selected):
+    """打开/关闭选股弹窗"""
+    ctx = dash.callback_context
+    trigger = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else ""
+    if trigger == "open-stock-picker":
+        # 打开弹窗时回填已选
+        return True, current_selected or []
+    if trigger == "stock-picker-confirm":
+        return False, dash.no_update
+    return not is_open, dash.no_update
+
+
+@callback(
+    Output("selected-symbols", "data"),
+    Input("stock-picker-confirm", "n_clicks"),
+    State("stock-checklist", "value"),
+    prevent_initial_call=True,
+)
+def confirm_selection(n_clicks, checked):
+    """确认选择后把结果写入 Store"""
+    return sorted(checked) if checked else []
+
+
+@callback(
+    Output("stock-checklist", "options"),
+    Input("stock-search", "value"),
+)
+def filter_stock_list(search):
+    """搜索过滤股票列表"""
+    if not search:
+        return [{"label": s, "value": s} for s in _sp500_all]
+    q = search.strip().upper()
+    filtered = [s for s in _sp500_all if q in s]
+    return [{"label": s, "value": s} for s in filtered]
+
+
+@callback(
+    Output("stock-checklist", "value", allow_duplicate=True),
+    Input("stock-select-all", "n_clicks"),
+    State("stock-checklist", "options"),
+    prevent_initial_call=True,
+)
+def select_all_stocks(n_clicks, options):
+    """全选当前可见股票"""
+    return [o["value"] for o in options]
+
+
+@callback(
+    Output("stock-checklist", "value", allow_duplicate=True),
+    Input("stock-clear-all", "n_clicks"),
+    prevent_initial_call=True,
+)
+def clear_all_stocks(n_clicks):
+    """清空所有选择"""
+    return []
+
+
+@callback(
+    Output("stock-count", "children"),
+    Output("modal-selected-count", "children"),
+    Input("stock-checklist", "value"),
+    Input("stock-checklist", "options"),
+)
+def update_stock_counts(selected, options):
+    """更新弹窗内的计数"""
+    n_visible = len(options) if options else 0
+    n_selected = len(selected) if selected else 0
+    return (
+        f"显示 {n_visible} / {len(_sp500_all)} 只",
+        f"已选 {n_selected} 只",
+    )
 
 
 @callback(
@@ -226,6 +429,8 @@ def update_factor_display(strategy_type):
     Output("backtest-done", "data"),
     Input("run-btn", "n_clicks"),
     State("strategy-type", "value"),
+    State("pool-type", "value"),
+    State("selected-symbols", "data"),
     State("top-n", "value"),
     State("rebalance-freq", "value"),
     State("initial-capital", "value"),
@@ -235,12 +440,18 @@ def update_factor_display(strategy_type):
     State("backtest-done", "data"),
     prevent_initial_call=True,
 )
-def on_run(n_clicks, strategy_type, top_n, rebalance_freq,
+def on_run(n_clicks, strategy_type, pool_type, selected_symbols, top_n, rebalance_freq,
            initial_capital, end_date, bt_months, warmup_months, done_count):
     if not n_clicks:
         return "", dash.no_update
     try:
         capital = float(initial_capital or 100) * 10_000  # 万 → 元
+        # 解析股票池
+        symbols: list[str] | None = None
+        if pool_type == "custom" and selected_symbols:
+            symbols = list(selected_symbols)
+            if not symbols:
+                symbols = None
         data = run_backtest(
             strategy_type=strategy_type,
             top_n=int(top_n or 10),
@@ -249,6 +460,7 @@ def on_run(n_clicks, strategy_type, top_n, rebalance_freq,
             backtest_months=int(bt_months or 12),
             warmup_months=int(warmup_months or 10),
             end_date=end_date or None,
+            symbols=symbols,
         )
         _cache["current"] = data
         return (

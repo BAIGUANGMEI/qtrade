@@ -78,6 +78,7 @@ def run_backtest(
     backtest_months: int = 12,
     warmup_months: int = 10,
     end_date: str | None = None,
+    symbols: list[str] | None = None,
 ) -> DashboardData:
     """运行一次完整回测并收集所有分析数据"""
 
@@ -91,7 +92,8 @@ def run_backtest(
     bt_end = dates["backtest_end"]
 
     # 加载数据
-    symbols = load_sp500_symbols()
+    if symbols is None:
+        symbols = load_sp500_symbols()
     md = MarketData()
     data = md.load(symbols=symbols, start=data_start, end=bt_end)
     benchmark = md.load_benchmark(start=data_start, end=bt_end)
