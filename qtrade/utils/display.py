@@ -113,8 +113,10 @@ _METRIC_LABELS = {
     "max_drawdown": ("最大回撤", False),
     "max_drawdown_duration_days": ("最大回撤持续(天)", False),
     "calmar_ratio": ("卡尔马比率", False),
-    "win_rate": ("胜率", True),
-    "profit_loss_ratio": ("盈亏比", False),
+    "win_rate": ("日度胜率", True),
+    "profit_loss_ratio": ("日度盈亏比", False),
+    "daily_win_rate": ("日度胜率", True),
+    "daily_profit_loss_ratio": ("日度盈亏比", False),
     "information_ratio": ("信息比率", False),
     "benchmark_return": ("基准收益", True),
     "excess_return": ("超额收益", True),
@@ -135,8 +137,14 @@ def backtest_report_table(metrics: dict[str, float], title: str = "回测绩效�
     table.add_column("指标", style="bold", no_wrap=True)
     table.add_column("值", justify="right")
 
+    seen_labels: set[str] = set()
     for key, value in metrics.items():
         label, is_pct = _METRIC_LABELS.get(key, (key, False))
+        # 同一指标存在多个 key 别名时 (如 win_rate / daily_win_rate 共享 "日度胜率"),
+        # 仅展示一次, 避免报告中出现重复行。
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
         if isinstance(value, float):
             if is_pct:
                 text = f"{value:+.2%}"

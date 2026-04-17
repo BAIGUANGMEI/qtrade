@@ -261,8 +261,14 @@ class BacktestEngine:
         # 净值观察器
         cerebro.addobserver(bt.observers.Broker)
 
-        # 为每只股票添加 data feed (跳过全 NaN 的股票)
+        # 为每只股票添加 data feed
+        # 注意: backtrader 多数据源会按全体 feed 时钟同步推进, 只要任一 feed 起始日期
+        # 晚于回测首日 (如回测期内 IPO 的新股), next() 的首次触发就会被延后到
+        # 迟到 feed 的首日, 导致真实回测窗口被大幅压缩, 年化指标随之严重失真。
+        # 因此这里剔除首个有效日期晚于回测首个交易日的股票。
+        bt_first_day = close.index[0] if len(close.index) > 0 else self.start_date
         valid_symbols = []
+        skipped_late_start: list[str] = []
         for sym in symbols:
             ohlcv = pd.DataFrame(
                 {
@@ -286,6 +292,12 @@ class BacktestEngine:
             if len(ohlcv) < 2:
                 continue
 
+            # 剔除回测期中途才有数据的股票 (新上市 / 数据缺失前段),
+            # 避免 backtrader 时钟同步导致回测窗口被截断。
+            if ohlcv.index[0] > bt_first_day:
+                skipped_late_start.append(sym)
+                continue
+
             valid_symbols.append(sym)
             bt_data = bt.feeds.PandasData(
                 dataname=ohlcv,
@@ -295,6 +307,17 @@ class BacktestEngine:
             cerebro.adddata(bt_data, name=sym)
 
         symbols = valid_symbols
+
+        if skipped_late_start:
+            import warnings
+
+            preview = ", ".join(skipped_late_start[:5])
+            more = f" 等共 {len(skipped_late_start)} 只" if len(skipped_late_start) > 5 else ""
+            warnings.warn(
+                f"回测期内首日无数据的股票已被剔除 (例: {preview}{more}), "
+                "以避免 backtrader 时钟同步导致回测窗口被截断。",
+                stacklevel=2,
+            )
 
         # 添加策略适配器
         cerebro.addstrategy(

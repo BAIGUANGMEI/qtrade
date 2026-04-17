@@ -10,24 +10,65 @@ import pandas as pd
 from qtrade.config import RISK_FREE_RATE, TRADING_DAYS_PER_YEAR
 
 
+# ------------------------------------------------------------------
+# 年化因子推断
+# ------------------------------------------------------------------
+
+def infer_periods_per_year(index: pd.DatetimeIndex) -> float:
+    """
+    根据时间索引推断 "每年观测期数" (年化因子)。
+
+    依据真实交易时间 (起止日期跨度 + 观测数) 计算, 避免对日频/小时频/周频
+    硬编码 252。当样本过少或跨度不足时, 回退到 ``TRADING_DAYS_PER_YEAR`` 作为默认值。
+
+    公式: periods_per_year = n_obs / (span_days / 365.25)
+    """
+    if index is None or len(index) < 2:
+        return float(TRADING_DAYS_PER_YEAR)
+    span_days = (index[-1] - index[0]).days
+    if span_days <= 0:
+        return float(TRADING_DAYS_PER_YEAR)
+    # 观测期数 = 观测点数 - 1 (相邻两点产生一次收益观测)
+    n_periods = len(index) - 1
+    years = span_days / 365.25
+    if years <= 0 or n_periods <= 0:
+        return float(TRADING_DAYS_PER_YEAR)
+    return float(n_periods / years)
+
+
+def _ppy_from_returns(returns: pd.Series) -> float:
+    """从收益序列的 DatetimeIndex 推断年化因子"""
+    if not isinstance(returns.index, pd.DatetimeIndex):
+        return float(TRADING_DAYS_PER_YEAR)
+    return infer_periods_per_year(returns.index)
+
+
 def annual_return(equity_curve: pd.Series) -> float:
-    """年化收益率"""
-    total_days = (equity_curve.index[-1] - equity_curve.index[0]).days
-    if total_days <= 0:
+    """年化收益率 (基于真实交易时间跨度)"""
+    n_bars = len(equity_curve) - 1  # 区间内的收益观测数
+    if n_bars <= 0:
         return 0.0
     total_return = equity_curve.iloc[-1] / equity_curve.iloc[0]
-    return float(total_return ** (365.0 / total_days) - 1)
+    if total_return <= 0:
+        # 爆仓 / 负净值场景下幂运算无定义, 回退为简单推算避免 NaN
+        return float(total_return - 1)
+    ppy = infer_periods_per_year(equity_curve.index) if isinstance(
+        equity_curve.index, pd.DatetimeIndex
+    ) else float(TRADING_DAYS_PER_YEAR)
+    return float(total_return ** (ppy / n_bars) - 1)
 
 
 def annual_volatility(daily_returns: pd.Series) -> float:
-    """年化波动率"""
-    return float(daily_returns.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
+    """年化波动率 (基于真实交易频率)"""
+    ppy = _ppy_from_returns(daily_returns)
+    return float(daily_returns.std() * np.sqrt(ppy))
 
 
 def sharpe_ratio(daily_returns: pd.Series, rf: float = RISK_FREE_RATE) -> float:
     """夏普比率"""
-    ann_ret = daily_returns.mean() * TRADING_DAYS_PER_YEAR
-    ann_vol = annual_volatility(daily_returns)
+    ppy = _ppy_from_returns(daily_returns)
+    ann_ret = daily_returns.mean() * ppy
+    ann_vol = daily_returns.std() * np.sqrt(ppy)
     if ann_vol == 0:
         return 0.0
     return float((ann_ret - rf) / ann_vol)
@@ -59,17 +100,24 @@ def calmar_ratio(equity_curve: pd.Series) -> float:
     return annual_return(equity_curve) / mdd
 
 
-def win_rate(trade_returns: pd.Series) -> float:
-    """胜率"""
-    if len(trade_returns) == 0:
+def win_rate(returns: pd.Series) -> float:
+    """胜率 (正收益观测占比)
+
+    注意: 传入 daily_returns 则得到 *日度胜率*; 传入逐笔 trade_returns 则得到
+    *交易胜率*。本项目当前在 full_metrics 中以 daily_returns 作为输入。
+    """
+    if len(returns) == 0:
         return 0.0
-    return float((trade_returns > 0).sum() / len(trade_returns))
+    return float((returns > 0).sum() / len(returns))
 
 
-def profit_loss_ratio(trade_returns: pd.Series) -> float:
-    """盈亏比"""
-    wins = trade_returns[trade_returns > 0]
-    losses = trade_returns[trade_returns < 0]
+def profit_loss_ratio(returns: pd.Series) -> float:
+    """盈亏比 (正收益均值 / |负收益均值|)
+
+    与 win_rate 同, 传入 daily_returns 得日度盈亏比, 传入 trade_returns 得交易盈亏比。
+    """
+    wins = returns[returns > 0]
+    losses = returns[returns < 0]
     if len(losses) == 0 or losses.mean() == 0:
         return float("inf") if len(wins) > 0 else 0.0
     return float(abs(wins.mean() / losses.mean()))
@@ -82,14 +130,16 @@ def information_ratio(
     excess = portfolio_returns - benchmark_returns
     if excess.std() == 0:
         return 0.0
-    return float(excess.mean() / excess.std() * np.sqrt(TRADING_DAYS_PER_YEAR))
+    ppy = _ppy_from_returns(portfolio_returns)
+    return float(excess.mean() / excess.std() * np.sqrt(ppy))
 
 
 def sortino_ratio(daily_returns: pd.Series, rf: float = RISK_FREE_RATE) -> float:
     """索提诺比率 (只考虑下行波动)"""
-    ann_ret = daily_returns.mean() * TRADING_DAYS_PER_YEAR
+    ppy = _ppy_from_returns(daily_returns)
+    ann_ret = daily_returns.mean() * ppy
     downside = daily_returns[daily_returns < 0]
-    downside_vol = downside.std() * np.sqrt(TRADING_DAYS_PER_YEAR) if len(downside) > 0 else 0
+    downside_vol = downside.std() * np.sqrt(ppy) if len(downside) > 0 else 0
     if downside_vol == 0:
         return 0.0
     return float((ann_ret - rf) / downside_vol)
@@ -111,6 +161,10 @@ def full_metrics(
         "max_drawdown": max_drawdown(equity_curve),
         "max_drawdown_duration_days": max_drawdown_duration(equity_curve),
         "calmar_ratio": calmar_ratio(equity_curve),
+        # 以下两项基于日度收益序列, 并非逐笔交易盈亏, 指标名称中已加 "daily_" 前缀
+        # 以避免与真实交易胜率混淆; 同时保留旧 key 作为别名以兼容历史代码。
+        "daily_win_rate": win_rate(daily_ret),
+        "daily_profit_loss_ratio": profit_loss_ratio(daily_ret),
         "win_rate": win_rate(daily_ret),
         "profit_loss_ratio": profit_loss_ratio(daily_ret),
     }

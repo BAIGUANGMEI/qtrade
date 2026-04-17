@@ -22,7 +22,7 @@ DEFAULT_SLIPPAGE = 0.001  # 0.1% 滑点
 RISK_FREE_RATE = 0.04  # 无风险利率 (年化)
 TRADING_DAYS_PER_YEAR = 252
 DEFAULT_BACKTEST_MONTHS = 12  # 默认回测区间: 最近 12 个月
-DEFAULT_WARMUP_MONTHS = 10   # 默认因子热身期: 10 个月
+DEFAULT_WARMUP_MONTHS = 6   # 默认因子热身期: 10 个月
 
 # ============ 因子分析配置 ============
 DEFAULT_QUANTILE_GROUPS = 5  # 默认分组数
