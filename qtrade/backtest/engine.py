@@ -140,6 +140,9 @@ class _WeightRebalanceStrategy(bt.Strategy):
         ("commission_rate", 0.0),
         ("slippage_rate", 0.0),
         ("allow_short", False),
+        ("progress_callback", None),
+        ("cancel_event", None),
+        ("total_bars", 0),
     )
 
     def __init__(self):
@@ -199,6 +202,24 @@ class _WeightRebalanceStrategy(bt.Strategy):
 
         # 记录每日净值
         self._equity_log.append({"date": current_date, "equity": total_value})
+
+        # 取消 / 进度回调 (每个 bar 触发一次)
+        cancel_event = self.p.cancel_event
+        if cancel_event is not None and cancel_event.is_set():
+            try:
+                self.env.runstop()
+            except Exception:
+                pass
+            return
+        progress_cb = self.p.progress_callback
+        if progress_cb is not None:
+            try:
+                bar_idx = len(self._equity_log)
+                progress_cb(bar_idx, int(self.p.total_bars or 0),
+                            current_date, float(total_value))
+            except Exception:
+                # 进度回调失败不应打断回测
+                pass
 
         # 记录每日持仓权重
         total_value = self.broker.getvalue()
@@ -353,6 +374,8 @@ class BacktestEngine:
         strategy,
         data: dict[str, pd.DataFrame] | None = None,
         benchmark: pd.Series | None = None,
+        progress_callback=None,
+        cancel_event=None,
     ) -> BacktestResult:
         """
         执行回测。
@@ -457,6 +480,9 @@ class BacktestEngine:
             commission_rate=self.commission,
             slippage_rate=self.slippage,
             allow_short=self.allow_short,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+            total_bars=len(close.index),
         )
 
         # ---- 运行 ----

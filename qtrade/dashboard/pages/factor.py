@@ -16,6 +16,30 @@ def layout():
     if data is None or data.result is None:
         return _placeholder()
 
+    # 从数据库加载的历史回测不含因子分析中间结果, 给出占位
+    if data.ic_summary is None or data.ic_summary.empty:
+        return html.Div(
+            [
+                html.H4("因子分析", className="mb-1"),
+                html.Small(
+                    f"因子: {data.factor_name or '—'}  ·  {data.backtest_start} ~ {data.backtest_end}",
+                    className="text-muted",
+                ),
+                html.Hr(className="mt-2 mb-3"),
+                dbc.Alert(
+                    [
+                        html.H6("该回测未附带因子分析明细", className="mb-1"),
+                        html.Small(
+                            "历史回测只保存了核心结果(净值/持仓/交易/fills)。如需查看因子分析, "
+                            "请在左侧面板重新运行此策略。",
+                            className="text-muted",
+                        ),
+                    ],
+                    color="secondary",
+                ),
+            ]
+        )
+
     return html.Div(
         [
             html.H4("因子分析", className="mb-1"),

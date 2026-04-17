@@ -13,53 +13,138 @@ def layout():
     from qtrade.dashboard.app import get_data
 
     data = get_data()
-    if data is None or data.result is None:
+
+    # 无数据或 "准备中" (live 但尚无进度点)
+    if data is None:
+        return _placeholder()
+    if data.result is None:
+        if getattr(data, "live", False):
+            return _live_placeholder(data)
         return _placeholder()
 
+    is_live = getattr(data, "live", False)
     r = data.result
     m = r.metrics
 
-    return html.Div(
+    # 进度 banner (实时模式时显示)
+    live_banner = []
+    if is_live:
+        bar = getattr(data, "live_bar", 0)
+        total = max(getattr(data, "live_total", 0), 1)
+        pct = int(100 * bar / total)
+        live_banner.append(
+            dbc.Alert(
+                [
+                    dbc.Spinner(size="sm", spinner_class_name="me-2"),
+                    f"回测运行中 · 进度 {pct}% ({bar}/{total})"
+                    f"  ·  净值 {r.equity_curve.iloc[-1]:,.0f}",
+                ],
+                color="info",
+                className="py-2 px-3 mb-3 d-flex align-items-center",
+            )
+        )
+
+    # 标题行
+    header = html.Div(
         [
-            html.H4("策略总览", className="mb-1"),
-            html.Small(
-                f"{data.strategy_name}  ·  {data.backtest_start} ~ {data.backtest_end}  ·  "
-                f"{data.symbols_count} 只股票  ·  因子: {data.factor_name}",
-                className="text-muted",
-            ),
-            html.Hr(className="mt-2 mb-3"),
-            # KPI 卡片
-            _kpi_row(m),
-            # 净值曲线
-            dbc.Card(
-                dbc.CardBody(dcc.Graph(figure=_equity_fig(r), config={"displaylogo": False})),
-                className="mb-3",
-            ),
-            # 月度收益热力图
-            dbc.Card(
-                dbc.CardBody(dcc.Graph(figure=_monthly_heatmap(r), config={"displaylogo": False})),
-                className="mb-3",
-            ),
-            # 滚动指标
-            dbc.Card(
-                dbc.CardBody(dcc.Graph(figure=_rolling_fig(r), config={"displaylogo": False})),
-                className="mb-3",
-            ),
-        ]
+            html.H4("策略总览", className="mb-1 d-inline-block"),
+            html.Div(
+                [
+                    dbc.Button(
+                        "↓ equity",
+                        id={"type": "export-btn", "kind": "equity"},
+                        size="sm", color="outline-light", className="me-1",
+                    ),
+                    dbc.Button(
+                        "↓ positions",
+                        id={"type": "export-btn", "kind": "positions"},
+                        size="sm", color="outline-light", className="me-1",
+                    ),
+                    dbc.Button(
+                        "↓ trades",
+                        id={"type": "export-btn", "kind": "trades"},
+                        size="sm", color="outline-light", className="me-1",
+                    ),
+                    dbc.Button(
+                        "↓ fills",
+                        id={"type": "export-btn", "kind": "fills"},
+                        size="sm", color="outline-light",
+                    ),
+                ],
+                className="float-end",
+            ) if not is_live else None,
+        ],
     )
+
+    info_parts = [data.strategy_name or ""]
+    if data.backtest_start and data.backtest_end:
+        info_parts.append(f"{data.backtest_start} ~ {data.backtest_end}")
+    if data.symbols_count:
+        info_parts.append(f"{data.symbols_count} 只股票")
+    if data.factor_name:
+        info_parts.append(f"因子: {data.factor_name}")
+
+    children: list = [
+        *live_banner,
+        header,
+        html.Small("  ·  ".join(info_parts), className="text-muted"),
+        html.Hr(className="mt-2 mb-3"),
+        # KPI 卡片
+        _kpi_row(m),
+        # 净值曲线
+        dbc.Card(
+            dbc.CardBody(dcc.Graph(figure=_equity_fig(r), config={"displaylogo": False})),
+            className="mb-3",
+        ),
+    ]
+
+    # 月度热力图 / 滚动指标 — 需要足够的日收益数据
+    has_enough = len(r.daily_returns.dropna()) > 5
+    if has_enough:
+        children.append(
+            dbc.Card(
+                dbc.CardBody(dcc.Graph(
+                    figure=_monthly_heatmap(r), config={"displaylogo": False})),
+                className="mb-3",
+            )
+        )
+    if len(r.daily_returns.dropna()) > 63:
+        children.append(
+            dbc.Card(
+                dbc.CardBody(dcc.Graph(
+                    figure=_rolling_fig(r), config={"displaylogo": False})),
+                className="mb-3",
+            )
+        )
+
+    return html.Div(children)
 
 
 # ====================================================================
 # KPI 卡片行
 # ====================================================================
 
-def _metric_card(title: str, value: str, sub: str = "", color: str = "light"):
+def _metric_card(title: str, value: str, sub: str = "", color: str = "light",
+                 delta: str = "", delta_color: str = ""):
+    delta_node = None
+    if delta:
+        delta_node = html.Small(
+            delta,
+            className="ms-2",
+            style={"color": delta_color or "#aaa", "fontWeight": "600"},
+        )
     return dbc.Col(
         dbc.Card(
             dbc.CardBody(
                 [
                     html.P(title, className="text-muted mb-1", style={"fontSize": "0.78rem"}),
-                    html.H5(value, className="mb-0", style={"fontWeight": "700"}),
+                    html.Div(
+                        [
+                            html.Span(value, style={"fontWeight": "700", "fontSize": "1.25rem"}),
+                            delta_node,
+                        ],
+                        className="mb-0",
+                    ),
                     html.Small(sub, className="text-muted") if sub else None,
                 ],
                 className="py-2 px-3",
@@ -74,24 +159,31 @@ def _metric_card(title: str, value: str, sub: str = "", color: str = "light"):
 
 
 def _kpi_row(m: dict) -> dbc.Row:
-    total_ret = m.get("total_return", 0)
-    ann_ret = m.get("annual_return", 0)
-    sharpe = m.get("sharpe_ratio", 0)
-    sortino = m.get("sortino_ratio", 0)
-    mdd = m.get("max_drawdown", 0)
-    calmar = m.get("calmar_ratio", 0)
-    win = m.get("daily_win_rate", m.get("win_rate", 0))
-    info_r = m.get("information_ratio", 0)
-    excess = m.get("excess_return", 0)
-    bench_ret = m.get("benchmark_return", 0)
+    total_ret = m.get("total_return", 0) or 0
+    ann_ret = m.get("annual_return", 0) or 0
+    sharpe = m.get("sharpe_ratio", 0) or 0
+    sortino = m.get("sortino_ratio", 0) or 0
+    mdd = m.get("max_drawdown", 0) or 0
+    calmar = m.get("calmar_ratio", 0) or 0
+    win = m.get("daily_win_rate", m.get("win_rate", 0)) or 0
+    info_r = m.get("information_ratio", 0) or 0
+    excess = m.get("excess_return", 0) or 0
+    bench_ret = m.get("benchmark_return", 0) or 0
 
     ret_color = "success" if total_ret >= 0 else "danger"
 
+    # 相对基准的 Δ
+    delta_vs_bench = total_ret - bench_ret
+    delta_text = f"Δ {delta_vs_bench:+.2%}"
+    delta_color = "#2ed573" if delta_vs_bench > 0 else "#ff4757"
+
     return dbc.Row(
         [
-            _metric_card("总收益", f"{total_ret:+.2%}", f"年化 {ann_ret:+.2%}", ret_color),
+            _metric_card("总收益", f"{total_ret:+.2%}", f"年化 {ann_ret:+.2%}", ret_color,
+                         delta=delta_text, delta_color=delta_color),
             _metric_card("夏普比率", f"{sharpe:.2f}", f"Sortino {sortino:.2f}"),
-            _metric_card("最大回撤", f"{mdd:.2%}", f"Calmar {calmar:.2f}", "danger" if mdd < -0.15 else "light"),
+            _metric_card("最大回撤", f"{mdd:.2%}", f"Calmar {calmar:.2f}",
+                         "danger" if mdd < -0.15 else "light"),
             _metric_card("胜率", f"{win:.1%}", "日频"),
             _metric_card("超额收益", f"{excess:+.2%}", f"基准 {bench_ret:+.2%}"),
             _metric_card("信息比率", f"{info_r:.2f}", ""),
@@ -247,6 +339,26 @@ def _placeholder():
                     html.I(className="bi bi-graph-up", style={"fontSize": "3rem"}),
                     html.H4("尚无回测数据", className="mt-3 mb-2"),
                     html.P("请在左侧面板配置参数后点击「运行回测」", className="text-muted"),
+                ],
+                className="text-center py-5",
+            )
+        ],
+        className="d-flex justify-content-center align-items-center",
+        style={"minHeight": "60vh"},
+    )
+
+
+def _live_placeholder(data):
+    """回测已启动但尚无进度点 (正在加载数据 / 计算因子)。"""
+    status = getattr(data, "live_status", "preparing")
+    msg = "正在加载数据与计算因子, 请稍候…" if status == "preparing" else "准备中…"
+    return html.Div(
+        [
+            html.Div(
+                [
+                    dbc.Spinner(color="primary", spinner_style={"width": "3rem", "height": "3rem"}),
+                    html.H4("回测运行中", className="mt-3 mb-2"),
+                    html.P(msg, className="text-muted"),
                 ],
                 className="text-center py-5",
             )

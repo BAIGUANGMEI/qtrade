@@ -1,0 +1,93 @@
+/* ============ 侧栏导航 ============ */
+#nav-links.nav-compact .nav-link {
+    padding: 0.35rem 0.7rem;
+    margin-bottom: 1px;
+    font-size: 0.85rem;
+    color: #888;
+    border-radius: 0;
+    transition: color 0.12s ease, background-color 0.12s ease;
+    border-left: 2px solid transparent;
+}
+
+#nav-links.nav-compact .nav-link:hover {
+    background-color: #181818;
+    color: #ddd;
+    border-left-color: #555;
+}
+
+#nav-links.nav-compact .nav-link.active {
+    background-color: #161616;
+    color: #fff;
+    font-weight: 600;
+    border-left-color: #fff;
+}
+
+/* ============ 侧栏通用微调 ============ */
+#sidebar .form-control,
+#sidebar .form-select {
+    background-color: #111;
+    border-color: #2a2a2a;
+    border-radius: 0;
+    color: #ccc;
+    font-size: 0.85rem;
+}
+
+#sidebar .form-control:focus,
+#sidebar .form-select:focus {
+    background-color: #161616;
+    border-color: #555;
+    box-shadow: none;
+    color: #fff;
+}
+
+#sidebar .form-control::placeholder {
+    color: #555;
+}
+
+#sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+#sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#sidebar::-webkit-scrollbar-thumb {
+    background: #222;
+    border-radius: 0;
+}
+
+#sidebar::-webkit-scrollbar-thumb:hover {
+    background: #444;
+}
+
+/* ============ 按钮 ============ */
+#run-btn {
+    letter-spacing: 0.5px;
+    border-radius: 0;
+}
+
+#cancel-btn {
+    border-radius: 0;
+}
+
+#run-btn:not(:disabled):hover {
+    box-shadow: 0 1px 4px rgba(255, 255, 255, 0.1);
+}
+
+/* ============ Card / Badge 无圆角 ============ */
+#sidebar .card {
+    border-radius: 0;
+}
+
+#sidebar .badge {
+    border-radius: 0;
+}
+
+#sidebar .btn-group .btn {
+    border-radius: 0 !important;
+}
+
+#sidebar .form-check-input {
+    border-radius: 0;
+}
