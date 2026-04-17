@@ -80,7 +80,7 @@ def _kpi_row(m: dict) -> dbc.Row:
     sortino = m.get("sortino_ratio", 0)
     mdd = m.get("max_drawdown", 0)
     calmar = m.get("calmar_ratio", 0)
-    win = m.get("win_rate", 0)
+    win = m.get("daily_win_rate", m.get("win_rate", 0))
     info_r = m.get("information_ratio", 0)
     excess = m.get("excess_return", 0)
     bench_ret = m.get("benchmark_return", 0)

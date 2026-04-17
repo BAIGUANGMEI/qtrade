@@ -39,6 +39,7 @@ class BacktestResult:
     trades: pd.DataFrame
     metrics: dict[str, float] = field(default_factory=dict)
     benchmark_curve: pd.Series | None = None
+    fills: pd.DataFrame = field(default_factory=pd.DataFrame)  # 真实成交回报
 
     def report(self, title: str = "回测绩效报告") -> None:
         """打印绩效报告 (rich 格式)"""
@@ -89,12 +90,59 @@ class _WeightRebalanceStrategy(bt.Strategy):
         ("panel_data", None),
         ("rebalance_dates", None),
         ("symbol_list", None),
+        ("commission_rate", 0.0),
+        ("slippage_rate", 0.0),
+        ("allow_short", False),
     )
 
     def __init__(self):
         self._trade_log: list[dict] = []
         self._daily_positions: list[dict] = []
         self._equity_log: list[dict] = []
+        self._fill_log: list[dict] = []  # 实际成交回报 (价格 / 手续费)
+
+    def notify_order(self, order):
+        """捕获 broker 回报: 记录真实成交价、成交数量、手续费。"""
+        if order.status in (order.Completed, order.Partial):
+            data_feed = order.data
+            sym = getattr(data_feed, "_name", None)
+            try:
+                exec_dt = pd.Timestamp(bt.num2date(order.executed.dt))
+            except Exception:
+                exec_dt = pd.NaT
+            side = "BUY" if order.isbuy() else "SELL"
+            self._fill_log.append(
+                {
+                    "exec_datetime": exec_dt,
+                    "symbol": sym,
+                    "side": side,
+                    "size": float(order.executed.size),
+                    "fill_price": float(order.executed.price),
+                    "commission": float(order.executed.comm),
+                    "value": float(order.executed.value),
+                    "status": "Completed" if order.status == order.Completed else "Partial",
+                }
+            )
+        elif order.status in (order.Canceled, order.Margin, order.Rejected):
+            data_feed = order.data
+            sym = getattr(data_feed, "_name", None)
+            reason = {
+                order.Canceled: "Canceled",
+                order.Margin: "Margin",
+                order.Rejected: "Rejected",
+            }.get(order.status, "Unknown")
+            self._fill_log.append(
+                {
+                    "exec_datetime": pd.NaT,
+                    "symbol": sym,
+                    "side": "BUY" if order.isbuy() else "SELL",
+                    "size": 0.0,
+                    "fill_price": float("nan"),
+                    "commission": 0.0,
+                    "value": 0.0,
+                    "status": reason,
+                }
+            )
 
     def next(self):
         dt = self.datas[0].datetime.date(0)
@@ -120,17 +168,15 @@ class _WeightRebalanceStrategy(bt.Strategy):
         if current_date not in self.p.rebalance_dates:
             return
 
-        # 截取到当日的历史数据 (防止前视偏差)
-        # 注: 首次调用时传完整数据用于因子预计算 (因子引擎内部不前视)
+        # 截取至当日的历史数据 (防止策略前视): 任何 generate_weights 访问
+        # 的 data[k] 都不能包含 current_date 之后的行。
+        # 注: 策略内部的因子预计算应该基于 strategy.load_data() 返回的
+        # 完整面板 (包含 warmup); 引擎不对此做任何特殊补偿。
         data_slice = {
             k: v.loc[:current_date]
             for k, v in self.p.panel_data.items()
             if current_date in v.index
         }
-        # 对于需要预计算的策略，首次传完整数据以覆盖整个回测区间
-        if not hasattr(self, '_full_data_passed'):
-            data_slice = {k: v for k, v in self.p.panel_data.items()}
-            self._full_data_passed = True
 
         target_weights = self.p.qtrade_strategy.generate_weights(
             current_date, data_slice
@@ -138,11 +184,40 @@ class _WeightRebalanceStrategy(bt.Strategy):
         if target_weights is None:
             return
 
-        # 归一化
+        # 归一化: 多空对冲策略会出现负权重, 此时归一化分母用总投线比例 (sum(|w|))
+        # 并保留符号。对于纯多策略, 最终 sum(w) == 1。
         w_sum = target_weights.abs().sum()
         if w_sum <= 0:
             return
         target_weights = target_weights / w_sum
+
+        # 若策略输出了负权重却未开启做空, 将负权重强制截断为 0 并告警 (仅首次)。
+        has_short = (target_weights < 0).any()
+        if has_short and not self.p.allow_short:
+            if not getattr(self, "_warned_short", False):
+                import warnings
+
+                warnings.warn(
+                    "策略输出了负权重但 BacktestEngine(allow_short=False) 未开启做空, "
+                    "负权重将被截断为 0。如需多空对冲请显式传入 allow_short=True。",
+                    stacklevel=2,
+                )
+                self._warned_short = True
+            target_weights = target_weights.clip(lower=0.0)
+            w_sum = target_weights.abs().sum()
+            if w_sum <= 0:
+                return
+            target_weights = target_weights / w_sum
+
+        # 预留现金缓冲区: 避免因手续费 + 滑点导致实际所需资金超过账户可用
+        # 现金, 从而被 broker 拒单。每笔交易雙边成本 ≈ commission + slippage,
+        # 为整体调仓留出 2x 的缓冲。
+        cost_buffer = 2.0 * (
+            float(self.p.commission_rate or 0.0)
+            + float(self.p.slippage_rate or 0.0)
+        )
+        cost_buffer = min(max(cost_buffer, 0.0), 0.05)  # 上限 5%
+        target_weights = target_weights * (1.0 - cost_buffer)
 
         # 调仓: 先卖后买 (避免资金不足)
         sym_to_idx = {s: i for i, s in enumerate(self.p.symbol_list)}
@@ -205,6 +280,7 @@ class BacktestEngine:
     rebalance_freq : 调仓频率 "D"/"W"/"M"/"Q"
     commission : 单边手续费率
     slippage : 滑点率
+    allow_short : 是否允许做空 (多空策略需开启, 默认 False)
     """
 
     def __init__(
@@ -215,6 +291,7 @@ class BacktestEngine:
         rebalance_freq: str = "M",
         commission: float = DEFAULT_COMMISSION_RATE,
         slippage: float = DEFAULT_SLIPPAGE,
+        allow_short: bool = False,
     ):
         self.initial_capital = initial_capital
         self.start_date = pd.Timestamp(start_date)
@@ -222,6 +299,7 @@ class BacktestEngine:
         self.rebalance_freq = rebalance_freq
         self.commission = commission
         self.slippage = slippage
+        self.allow_short = allow_short
 
     def run(
         self,
@@ -257,6 +335,9 @@ class BacktestEngine:
         cerebro.broker.setcash(self.initial_capital)
         cerebro.broker.setcommission(commission=self.commission)
         cerebro.broker.set_slippage_perc(self.slippage)
+        if not self.allow_short:
+            # 禁止做空 (backtrader 默认也不允许做空现金账户, 这里显式声明)
+            cerebro.broker.set_shortcash(False)
 
         # 净值观察器
         cerebro.addobserver(bt.observers.Broker)
@@ -326,6 +407,9 @@ class BacktestEngine:
             panel_data=data,
             rebalance_dates=rebalance_dates,
             symbol_list=symbols,
+            commission_rate=self.commission,
+            slippage_rate=self.slippage,
+            allow_short=self.allow_short,
         )
 
         # ---- 运行 ----
@@ -427,6 +511,17 @@ class BacktestEngine:
         benchmark_curve = None
         if benchmark is not None:
             bench = benchmark.reindex(equity_series.index).dropna()
+            # 日期对齐校验: 若基准覆盖率过低, 超额收益/信息比率将严重失真
+            coverage = len(bench) / max(len(equity_series), 1)
+            if coverage < 0.95:
+                import warnings
+
+                warnings.warn(
+                    f"基准与组合净值的日期重合度仅 {coverage:.1%} "
+                    f"(基准 {len(bench)} / 组合 {len(equity_series)} 日), "
+                    "可能导致信息比率/超额收益失真, 请检查基准数据范围。",
+                    stacklevel=2,
+                )
             if len(bench) > 0:
                 benchmark_curve = (
                     bench / bench.iloc[0] * self.initial_capital
@@ -436,6 +531,20 @@ class BacktestEngine:
         # 绩效指标
         metrics = full_metrics(equity_series, benchmark_curve=benchmark_curve)
 
+        # 真实成交回报 & 逐笔交易胜率/盈亏比
+        fills_df = (
+            pd.DataFrame(strat._fill_log)
+            if strat._fill_log
+            else pd.DataFrame(
+                columns=[
+                    "exec_datetime", "symbol", "side", "size",
+                    "fill_price", "commission", "value", "status",
+                ]
+            )
+        )
+        trade_metrics = _compute_trade_metrics(fills_df)
+        metrics.update(trade_metrics)
+
         return BacktestResult(
             equity_curve=equity_series,
             daily_returns=daily_ret,
@@ -443,6 +552,7 @@ class BacktestEngine:
             trades=trades_df,
             metrics=metrics,
             benchmark_curve=benchmark_curve,
+            fills=fills_df,
         )
 
     def _get_rebalance_dates(
@@ -463,3 +573,93 @@ class BacktestEngine:
             if len(dates_in_period) > 0:
                 last_days.add(dates_in_period[-1])
         return last_days
+
+
+# ====================================================================
+# 辅助: 从成交回报计算逐笔交易盈亏指标 (FIFO 配对)
+# ====================================================================
+
+
+def _compute_trade_metrics(fills: pd.DataFrame) -> dict[str, float]:
+    """
+    基于真实成交回报用 FIFO 法配对平仓, 得到逐笔交易盈亏。
+
+    返回 trade_win_rate / trade_profit_loss_ratio / trade_count / total_commission。
+    未配对的尾部持仓 (未平仓) 不计入胜率统计。
+    """
+    if fills is None or fills.empty:
+        return {
+            "trade_win_rate": 0.0,
+            "trade_profit_loss_ratio": 0.0,
+            "trade_count": 0,
+            "total_commission": 0.0,
+        }
+
+    completed = fills[fills["status"] == "Completed"].copy()
+    if completed.empty:
+        return {
+            "trade_win_rate": 0.0,
+            "trade_profit_loss_ratio": 0.0,
+            "trade_count": 0,
+            "total_commission": float(fills["commission"].sum()),
+        }
+
+    total_commission = float(completed["commission"].sum())
+
+    # 按 symbol FIFO 配对: 以首次开仓方向 (long/short) 为基准, 反向成交视为平仓
+    trade_pnls: list[float] = []
+    for sym, grp in completed.groupby("symbol", sort=False):
+        grp = grp.sort_values("exec_datetime", kind="stable")
+        # 队列存 (size, price), size 带正负号
+        queue: list[list[float]] = []
+        for row in grp.itertuples(index=False):
+            signed = row.size  # backtrader: buy +size, sell -size
+            if not queue or (queue[0][0] >= 0) == (signed >= 0):
+                # 同向加仓
+                queue.append([signed, float(row.fill_price)])
+                continue
+            # 反向: 逐批平仓
+            remaining = signed
+            while queue and remaining != 0 and (queue[0][0] >= 0) != (remaining >= 0):
+                open_size, open_price = queue[0]
+                match = min(abs(open_size), abs(remaining))
+                # 多头: pnl = (close - open) * match; 空头相反
+                if open_size > 0:
+                    pnl = (float(row.fill_price) - open_price) * match
+                else:
+                    pnl = (open_price - float(row.fill_price)) * match
+                trade_pnls.append(pnl)
+                if abs(open_size) - match <= 1e-9:
+                    queue.pop(0)
+                else:
+                    queue[0][0] = open_size - (match if open_size > 0 else -match)
+                remaining = remaining + match if remaining < 0 else remaining - match
+            if abs(remaining) > 1e-9:
+                # 反手开新仓
+                queue.append([remaining, float(row.fill_price)])
+
+    trade_count = len(trade_pnls)
+    if trade_count == 0:
+        return {
+            "trade_win_rate": 0.0,
+            "trade_profit_loss_ratio": 0.0,
+            "trade_count": 0,
+            "total_commission": total_commission,
+        }
+
+    wins = [p for p in trade_pnls if p > 0]
+    losses = [p for p in trade_pnls if p < 0]
+    win_rate_val = len(wins) / trade_count
+    if losses and sum(losses) != 0:
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = abs(sum(losses) / len(losses))
+        pl_ratio = avg_win / avg_loss if avg_loss > 0 else float("inf")
+    else:
+        pl_ratio = float("inf") if wins else 0.0
+
+    return {
+        "trade_win_rate": float(win_rate_val),
+        "trade_profit_loss_ratio": float(pl_ratio),
+        "trade_count": int(trade_count),
+        "total_commission": total_commission,
+    }

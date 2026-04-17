@@ -72,16 +72,18 @@ class TopNStrategy(Strategy):
             self._data = md.load(self.symbols, self.start_date, self.end_date)
         return self._data
 
-    def _ensure_factor(self, data: dict[str, pd.DataFrame]):
+    def _ensure_factor(self) -> None:
+        """基于策略自己加载的完整面板 (含 warmup) 预计算因子值,
+        避免依赖回测引擎首次传入全量数据的脆弱契约。"""
         if self._factor_values is None:
             self._factor_values = self._engine.compute_factor(
-                self.factor_name, data, **self.factor_params
+                self.factor_name, self.load_data(), **self.factor_params
             )
 
     def generate_weights(
         self, date: pd.Timestamp, data: dict[str, pd.DataFrame]
     ) -> pd.Series | None:
-        self._ensure_factor(data)
+        self._ensure_factor()
         if date not in self._factor_values.index:
             return None
 
@@ -137,16 +139,16 @@ class LongShortStrategy(Strategy):
             self._data = md.load(self.symbols, self.start_date, self.end_date)
         return self._data
 
-    def _ensure_factor(self, data: dict[str, pd.DataFrame]):
+    def _ensure_factor(self) -> None:
         if self._factor_values is None:
             self._factor_values = self._engine.compute_factor(
-                self.factor_name, data, **self.factor_params
+                self.factor_name, self.load_data(), **self.factor_params
             )
 
     def generate_weights(
         self, date: pd.Timestamp, data: dict[str, pd.DataFrame]
     ) -> pd.Series | None:
-        self._ensure_factor(data)
+        self._ensure_factor()
         if date not in self._factor_values.index:
             return None
 
@@ -208,9 +210,10 @@ class MultiFactorStrategy(Strategy):
             self._data = md.load(self.symbols, self.start_date, self.end_date)
         return self._data
 
-    def _build_composite(self, data: dict[str, pd.DataFrame]):
+    def _build_composite(self) -> None:
         if self._composite is not None:
             return
+        data = self.load_data()
         factor_dfs = self._engine.compute_factors(
             list(self.factor_weights.keys()), data
         )
@@ -227,7 +230,7 @@ class MultiFactorStrategy(Strategy):
     def generate_weights(
         self, date: pd.Timestamp, data: dict[str, pd.DataFrame]
     ) -> pd.Series | None:
-        self._build_composite(data)
+        self._build_composite()
         if date not in self._composite.index:
             return None
 

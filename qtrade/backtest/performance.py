@@ -161,12 +161,10 @@ def full_metrics(
         "max_drawdown": max_drawdown(equity_curve),
         "max_drawdown_duration_days": max_drawdown_duration(equity_curve),
         "calmar_ratio": calmar_ratio(equity_curve),
-        # 以下两项基于日度收益序列, 并非逐笔交易盈亏, 指标名称中已加 "daily_" 前缀
-        # 以避免与真实交易胜率混淆; 同时保留旧 key 作为别名以兼容历史代码。
+        # 以下两项基于日度收益序列, 并非逐笔交易盈亏; 名称中的 "daily_" 前缀明确
+        # 标注语义, 避免与真实交易胜率混淆。
         "daily_win_rate": win_rate(daily_ret),
         "daily_profit_loss_ratio": profit_loss_ratio(daily_ret),
-        "win_rate": win_rate(daily_ret),
-        "profit_loss_ratio": profit_loss_ratio(daily_ret),
     }
 
     if benchmark_curve is not None:

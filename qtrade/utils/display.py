@@ -117,6 +117,10 @@ _METRIC_LABELS = {
     "profit_loss_ratio": ("日度盈亏比", False),
     "daily_win_rate": ("日度胜率", True),
     "daily_profit_loss_ratio": ("日度盈亏比", False),
+    "trade_win_rate": ("交易胜率", True),
+    "trade_profit_loss_ratio": ("交易盈亏比", False),
+    "trade_count": ("成交笔数", False),
+    "total_commission": ("累计手续费", False),
     "information_ratio": ("信息比率", False),
     "benchmark_return": ("基准收益", True),
     "excess_return": ("超额收益", True),
@@ -148,8 +152,10 @@ def backtest_report_table(metrics: dict[str, float], title: str = "回测绩效�
         if isinstance(value, float):
             if is_pct:
                 text = f"{value:+.2%}"
-            elif "duration" in key:
+            elif "duration" in key or key in ("trade_count",):
                 text = str(int(value))
+            elif key == "total_commission":
+                text = f"{value:,.2f}"
             else:
                 text = f"{value:.4f}"
 
