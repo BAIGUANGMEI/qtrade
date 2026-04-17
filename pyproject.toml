@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qtrade"
+version = "0.1.0"
+description = "个人美股因子量化系统"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "yfinance>=0.2.30",
+    "matplotlib>=3.7",
+    "pyarrow>=14.0",
+    "rich>=13.0",
+    "lxml>=4.9",
+    "backtrader>=1.9.78",
+]
+
+[tool.setuptools]
+packages = ["qtrade", "qtrade.data", "qtrade.factor", "qtrade.analysis", "qtrade.backtest", "qtrade.strategy", "qtrade.utils", "qtrade.examples"]

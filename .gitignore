@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# Data cache
+data_cache/
+
+# Outputs (charts, CSVs)
+outputs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# User strategies
+qtrade/examples/composite_factors.py
+qtrade/examples/composite_strategy.py
+qtrade/run_composite.py
+
+# uv
+uv.lock
