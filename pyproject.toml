@@ -17,6 +17,9 @@ dependencies = [
     "rich>=13.0",
     "lxml>=4.9",
     "backtrader>=1.9.78",
+    "dash>=4.1.0",
+    "dash-bootstrap-components>=2.0.4",
+    "plotly>=6.7.0",
 ]
 
 [tool.setuptools]

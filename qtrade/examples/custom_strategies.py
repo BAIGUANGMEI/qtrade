@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from qtrade.strategy.base import Strategy
+from qtrade.strategy.base import Strategy, register_strategy
 from qtrade.factor.engine import FactorEngine
 from qtrade.data.market_data import MarketData
 from qtrade.config import smart_dates
@@ -17,6 +17,7 @@ from qtrade.config import smart_dates
 import qtrade.examples.custom_factors  # noqa: F401
 
 
+@register_strategy("TopNStrategy", display_name="TopN 等权选股")
 class TopNStrategy(Strategy):
     """
     Top-N 因子选股策略
@@ -33,7 +34,7 @@ class TopNStrategy(Strategy):
     factor_params : 因子的额外参数
     """
 
-    name = "TopNStrategy"
+    default_factor_names = ["momentum_20d"]
 
     def __init__(
         self,
@@ -94,6 +95,7 @@ class TopNStrategy(Strategy):
         return weights
 
 
+@register_strategy("LongShortStrategy", display_name="多空对冲")
 class LongShortStrategy(Strategy):
     """
     多空因子策略
@@ -101,7 +103,7 @@ class LongShortStrategy(Strategy):
     买入因子值最高的 top_n 只，卖出因子值最低的 top_n 只。
     """
 
-    name = "LongShortStrategy"
+    default_factor_names = ["momentum_20d"]
 
     def __init__(
         self,
@@ -162,6 +164,7 @@ class LongShortStrategy(Strategy):
         return weights
 
 
+@register_strategy("MultiFactorStrategy", display_name="多因子复合排名")
 class MultiFactorStrategy(Strategy):
     """
     多因子复合策略
@@ -169,7 +172,7 @@ class MultiFactorStrategy(Strategy):
     将多个因子的排名加权合成，然后选 top_n。
     """
 
-    name = "MultiFactorStrategy"
+    default_factor_names = ["momentum_20d", "reversal_5d", "volatility_20d"]
 
     def __init__(
         self,
